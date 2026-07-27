@@ -326,7 +326,7 @@ export class ModelRouter {
   static defaultsFor(modelId: string): Pick<ModelSelection, 'maxTokens' | 'temperature'> {
     const entry = getCatalogEntry(modelId);
     return {
-      maxTokens: entry?.maxTokens ?? 4096,
+      maxTokens: entry?.maxTokens ?? 3072,
       temperature: entry?.temperature ?? 0.4,
     };
   }

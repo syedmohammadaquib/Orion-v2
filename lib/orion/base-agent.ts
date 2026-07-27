@@ -16,7 +16,7 @@ export abstract class BaseAgent {
   protected sharedMemory: SharedMemory;
   protected preferredModel: string;
   protected fallbackModels: string[];
-  protected maxTokens: number = 4096;
+  protected maxTokens: number = 3072;
   protected temperature: number = 0.4;
 
   constructor(

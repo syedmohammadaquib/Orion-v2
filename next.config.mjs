@@ -7,8 +7,6 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
-  // Ensure monaco ESM resolves cleanly under Turbopack
-  transpilePackages: ['monaco-editor'],
   // Security headers for every response
   async headers() {
     return [

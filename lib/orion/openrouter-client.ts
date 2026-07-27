@@ -1,7 +1,9 @@
 import OpenAI from 'openai';
 
-const DEFAULT_MAX_TOKENS = 8192;
-const MAX_RETRIES = 3;
+/** Soft default — keep completion budgets modest so low OpenRouter balances still work. */
+const DEFAULT_MAX_TOKENS = 3072;
+const HARD_CAP_MAX_TOKENS = 8192;
+const MAX_RETRIES = 4;
 const REQUEST_TIMEOUT_MS = 90_000;
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string };
@@ -44,6 +46,35 @@ function extractSuggestedSlug(errorMessage: string): string | null {
   return match ? normalizeModelSlug(match[1]) : null;
 }
 
+/** Parse OpenRouter 402: "can only afford 2383" */
+export function extractAffordableMaxTokens(errorMessage: string): number | null {
+  const afford = errorMessage.match(/can only afford\s+(\d+)/i);
+  if (afford) {
+    const n = Number(afford[1]);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  const requested = errorMessage.match(/requested up to\s+(\d+)\s+tokens/i);
+  if (requested && /402|credits|afford/i.test(errorMessage)) {
+    const n = Math.floor(Number(requested[1]) / 2);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+}
+
+export function clampMaxTokens(requested: number, affordable?: number | null): number {
+  const envCap = Number(process.env.ORION_MAX_TOKENS);
+  const hardCap =
+    Number.isFinite(envCap) && envCap > 0
+      ? Math.min(envCap, HARD_CAP_MAX_TOKENS)
+      : HARD_CAP_MAX_TOKENS;
+  let tokens = Math.max(256, Math.min(Math.floor(requested), hardCap));
+  if (affordable != null && Number.isFinite(affordable)) {
+    // Leave a small buffer so residual credit estimate still covers the call
+    tokens = Math.min(tokens, Math.max(256, Math.floor(affordable) - 16));
+  }
+  return tokens;
+}
+
 export class OpenRouterClient {
   private client: OpenAI;
 
@@ -77,16 +108,18 @@ export class OpenRouterClient {
     temperature: number = 0.4,
   ): Promise<ChatResult> {
     let activeModel = normalizeModelSlug(model);
+    let activeMaxTokens = clampMaxTokens(maxTokens);
     const allMessages = this.buildMessages(messages, systemPrompt);
     let lastError: Error | null = null;
     const tried = new Set<string>();
+    let creditFallbackUsed = false;
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      tried.add(activeModel);
+      tried.add(`${activeModel}@${activeMaxTokens}`);
       try {
         const response = await this.client.chat.completions.create({
           model: activeModel,
-          max_tokens: maxTokens,
+          max_tokens: activeMaxTokens,
           messages: allMessages,
           temperature,
         });
@@ -109,10 +142,34 @@ export class OpenRouterClient {
 
         // OpenRouter often returns: free slug dead → use paid slug
         const suggested = extractSuggestedSlug(msg);
-        if (suggested && !tried.has(suggested)) {
+        if (suggested && !tried.has(`${suggested}@${activeMaxTokens}`)) {
           console.warn(`[OpenRouterClient] ${activeModel} unavailable → switching to ${suggested}`);
           activeModel = suggested;
           continue;
+        }
+
+        // 402: credit / max_tokens too high → retry with affordable cap
+        const affordable = extractAffordableMaxTokens(msg);
+        if ((msg.includes('402') || /afford|more credits/i.test(msg)) && affordable != null) {
+          const reduced = clampMaxTokens(Math.min(activeMaxTokens, affordable), affordable);
+          if (reduced < activeMaxTokens && !tried.has(`${activeModel}@${reduced}`)) {
+            console.warn(
+              `[OpenRouterClient] 402 credit limit — reducing max_tokens ${activeMaxTokens} → ${reduced}`,
+            );
+            activeMaxTokens = reduced;
+            continue;
+          }
+          // Still can't afford this model — switch to cheap flash once
+          const flashKey = `google/gemini-2.5-flash@${reduced}`;
+          if (!creditFallbackUsed && !tried.has(flashKey)) {
+            console.warn(
+              `[OpenRouterClient] 402 — falling back to google/gemini-2.5-flash @ ${reduced} tokens`,
+            );
+            activeModel = 'google/gemini-2.5-flash';
+            activeMaxTokens = reduced;
+            creditFallbackUsed = true;
+            continue;
+          }
         }
 
         const isRetryable =
@@ -124,8 +181,7 @@ export class OpenRouterClient {
 
         if (!isRetryable || attempt === MAX_RETRIES - 1) break;
 
-        // On 404 without suggestion, try openrouter/auto once
-        if (msg.includes('404') && !tried.has('openrouter/auto')) {
+        if (msg.includes('404') && !tried.has(`openrouter/auto@${activeMaxTokens}`)) {
           activeModel = 'openrouter/auto';
           continue;
         }
@@ -149,11 +205,12 @@ export class OpenRouterClient {
     temperature: number = 0.4,
   ): Promise<AsyncIterable<string>> {
     const activeModel = normalizeModelSlug(model);
+    const activeMaxTokens = clampMaxTokens(maxTokens);
     const allMessages = this.buildMessages(messages, systemPrompt);
 
     const stream = await this.client.chat.completions.create({
       model: activeModel,
-      max_tokens: maxTokens,
+      max_tokens: activeMaxTokens,
       messages: allMessages,
       temperature,
       stream: true,

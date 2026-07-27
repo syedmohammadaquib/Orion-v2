@@ -1,7 +1,6 @@
 'use client';
 
-import { useState } from 'react';
-import { motion } from 'framer-motion';
+import { useMemo, useState } from 'react';
 import { RefreshCw, ExternalLink } from 'lucide-react';
 
 interface FileNode {
@@ -18,131 +17,129 @@ interface PreviewPanelProps {
   manifest: any;
 }
 
+function normalizeVfsPath(path: string): string {
+  return path.replace(/^\.?\//, '').replace(/\\/g, '/');
+}
+
+function findVfsContent(
+  vfs: Record<string, { content: string; language: string }>,
+  href: string,
+): string | null {
+  const cleaned = normalizeVfsPath(href.split('?')[0].split('#')[0]);
+  if (vfs[cleaned]?.content != null) return vfs[cleaned].content;
+  const hit = Object.entries(vfs).find(
+    ([path]) => path === cleaned || path.endsWith(`/${cleaned}`) || path.endsWith(cleaned),
+  );
+  return hit ? hit[1].content : null;
+}
+
+/** Rewrite local CSS/JS references into inline content so the iframe never hits Next routes. */
+function inlineLocalAssets(
+  html: string,
+  vfs: Record<string, { content: string; language: string }>,
+): string {
+  let out = html;
+
+  out = out.replace(
+    /<link\b[^>]*\brel=["']stylesheet["'][^>]*\bhref=["']([^"']+)["'][^>]*>/gi,
+    (full, href: string) => {
+      if (/^https?:\/\//i.test(href) || href.startsWith('data:')) return full;
+      const css = findVfsContent(vfs, href);
+      if (css == null) return `<!-- missing stylesheet: ${href} -->`;
+      return `<style data-orion-inlined="${href}">\n${css}\n</style>`;
+    },
+  );
+
+  out = out.replace(
+    /<script\b([^>]*)\bsrc=["']([^"']+)["']([^>]*)>\s*<\/script>/gi,
+    (full, pre: string, src: string, post: string) => {
+      if (/^https?:\/\//i.test(src) || src.startsWith('data:')) return full;
+      const js = findVfsContent(vfs, src);
+      if (js == null) return `<!-- missing script: ${src} -->`;
+      return `<script${pre}${post} data-orion-inlined="${src}">\n${js}\n</script>`;
+    },
+  );
+
+  return out;
+}
+
+function findFileByName(nodes: FileNode[], name: string): FileNode | null {
+  for (const node of nodes) {
+    if (node.type === 'file' && node.name === name) return node;
+    if (node.children) {
+      const found = findFileByName(node.children, name);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 export function PreviewPanel({ files, vfs, manifest }: PreviewPanelProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [nonce, setNonce] = useState(0);
 
   const handleRefresh = () => {
     setIsRefreshing(true);
-    setTimeout(() => setIsRefreshing(false), 1000);
+    setNonce((n) => n + 1);
+    setTimeout(() => setIsRefreshing(false), 400);
   };
 
-  const generatePreview = () => {
-    // First check if manifest has previewFile
-    if (manifest?.previewFile && vfs[manifest.previewFile]) {
-      return vfs[manifest.previewFile].content;
-    }
-    
-    // Fallback: find index.html
-    const findFileByName = (nodes: FileNode[], name: string): FileNode | null => {
-      for (const node of nodes) {
-        if (node.type === 'file' && node.name === name) {
-          return node;
-        }
-        if (node.children) {
-          const found = findFileByName(node.children, name);
-          if (found) return found;
-        }
+  const previewContent = useMemo(() => {
+    let html: string | null = null;
+
+    if (manifest?.previewFile && vfs[manifest.previewFile]?.content) {
+      html = vfs[manifest.previewFile].content;
+    } else {
+      const htmlFile = findFileByName(files, 'index.html');
+      if (htmlFile?.content) html = htmlFile.content;
+      else {
+        const htmlEntry = Object.entries(vfs).find(([path]) => path.endsWith('index.html'));
+        if (htmlEntry) html = htmlEntry[1].content;
       }
-      return null;
-    };
-
-    const htmlFile = findFileByName(files, 'index.html');
-    if (htmlFile && htmlFile.content) {
-      return htmlFile.content;
     }
 
-    const reactFiles = files.filter(f => f.name.endsWith('.tsx') || f.name.endsWith('.jsx'));
+    if (html) {
+      return inlineLocalAssets(html, vfs);
+    }
+
+    const reactFiles = files.filter((f) => f.name.endsWith('.tsx') || f.name.endsWith('.jsx'));
     if (reactFiles.length > 0) {
-      return `
-<!DOCTYPE html>
+      const names = reactFiles.map((f) => f.name);
+      return `<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Preview</title>
-  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      margin: 0;
-      padding: 20px;
-      background: #f5f5f5;
-    }
-    .container {
-      max-width: 800px;
-      margin: 0 auto;
-      background: white;
-      padding: 32px;
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    }
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #f4f2ec; color: #1a1d26; }
+    .panel { max-width: 560px; margin: 40px auto; background: #fff; border: 1px solid #e5e1d8; border-radius: 8px; padding: 28px; }
+    h1 { margin: 0 0 8px; font-size: 1.2rem; }
+    p, li { color: #5c584f; line-height: 1.5; }
   </style>
 </head>
 <body>
-  <div id="root"></div>
-  <script type="text/babel">
-    const { useState } = React;
-
-    function App() {
-      return (
-        <div className="container">
-          <h1 style={{ fontSize: '2em', marginBottom: '0.5em' }}>Generated Artifact Preview</h1>
-          <p style={{ color: '#666' }}>This is a live preview of the generated artifact.</p>
-          <div style={{ marginTop: '20px', padding: '16px', background: '#f0f0f0', borderRadius: '4px' }}>
-            <strong>Files in project:</strong>
-            <ul style={{ marginTop: '8px', marginBottom: 0 }}>
-              ${reactFiles.map(f => `<li key="${f.name}">${f.name}</li>`).join('')}
-            </ul>
-          </div>
-        </div>
-      );
-    }
-
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-  </script>
+  <div class="panel">
+    <h1>React project detected</h1>
+    <p>Live React runtime preview needs a bundler. Open the Code tab to inspect these files:</p>
+    <ul>${names.map((n) => `<li>${n}</li>`).join('')}</ul>
+  </div>
 </body>
 </html>`;
     }
 
-    return `
-<!DOCTYPE html>
+    return `<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Preview</title>
   <style>
-    body {
-      font-family: 'IBM Plex Sans', system-ui, sans-serif;
-      margin: 0;
-      padding: 40px;
-      background: #f4f2ec;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #1a1d26;
-    }
-    .panel {
-      background: #fff;
-      padding: 32px;
-      border: 1px solid #e5e1d8;
-      border-radius: 8px;
-      max-width: 480px;
-    }
-    h1 {
-      margin: 0 0 12px 0;
-      font-size: 1.25rem;
-      letter-spacing: -0.02em;
-    }
-    p {
-      margin: 0;
-      color: #5c584f;
-      line-height: 1.55;
-      font-size: 0.95rem;
-    }
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 40px; background: #f4f2ec; color: #1a1d26;
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .panel { background: #fff; padding: 32px; border: 1px solid #e5e1d8; border-radius: 8px; max-width: 480px; }
+    h1 { margin: 0 0 12px; font-size: 1.25rem; }
+    p { margin: 0; color: #5c584f; line-height: 1.55; }
   </style>
 </head>
 <body>
@@ -152,9 +149,7 @@ export function PreviewPanel({ files, vfs, manifest }: PreviewPanelProps) {
   </div>
 </body>
 </html>`;
-  };
-
-  const previewContent = generatePreview();
+  }, [files, vfs, manifest, nonce]);
 
   return (
     <div className="h-full flex flex-col bg-orion-surface">
@@ -188,6 +183,7 @@ export function PreviewPanel({ files, vfs, manifest }: PreviewPanelProps) {
       </div>
       <div className="flex-1 bg-white">
         <iframe
+          key={nonce}
           srcDoc={previewContent}
           className="w-full h-full border-0"
           title="Artifact Preview"

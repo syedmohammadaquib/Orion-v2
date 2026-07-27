@@ -1,7 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import Editor, { loader } from '@monaco-editor/react';
+import { useMemo } from 'react';
 
 interface FileNode {
   name: string;
@@ -14,70 +13,15 @@ interface CodeEditorProps {
   file: FileNode | null | undefined;
 }
 
-/** Prefer bundled monaco over CDN — CSP blocks jsDelivr script loads. */
-let monacoInit: Promise<void> | null = null;
-
-function initMonacoFromBundle(): Promise<void> {
-  if (!monacoInit) {
-    monacoInit = import('monaco-editor')
-      .then((monaco) => {
-        loader.config({ monaco });
-        return loader.init().then(() => undefined);
-      })
-      .catch((err) => {
-        // Surface a real Error instead of a raw Event / {}
-        const message =
-          err instanceof Error
-            ? err.message
-            : err?.type
-              ? `Monaco script/worker load failed (${err.type})`
-              : 'Monaco failed to initialize';
-        throw new Error(message);
-      });
-  }
-  return monacoInit;
-}
-
+/**
+ * Lightweight code viewer — Monaco is avoided on purpose.
+ * Next.js 16 + Turbopack breaks monaco workers (unhandled ErrorEvent).
+ */
 export function CodeEditor({ file }: CodeEditorProps) {
-  const editorRef = useRef<any>(null);
-  const [ready, setReady] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    initMonacoFromBundle()
-      .then(() => {
-        if (!cancelled) setReady(true);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        const msg = err instanceof Error ? err.message : 'Monaco failed to initialize';
-        setError(msg);
-        console.error('Monaco initialization:', msg, err);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const getLanguage = (fileName: string): string => {
-    const ext = fileName.split('.').pop()?.toLowerCase();
-    const languageMap: Record<string, string> = {
-      js: 'javascript',
-      jsx: 'javascript',
-      ts: 'typescript',
-      tsx: 'typescript',
-      py: 'python',
-      go: 'go',
-      rs: 'rust',
-      json: 'json',
-      md: 'markdown',
-      html: 'html',
-      css: 'css',
-      txt: 'plaintext',
-    };
-    return languageMap[ext || ''] || 'plaintext';
-  };
+  const lines = useMemo(() => {
+    const content = file?.content ?? '';
+    return content.length > 0 ? content.split(/\r?\n/) : [''];
+  }, [file?.content]);
 
   if (!file || file.type === 'folder') {
     return (
@@ -90,53 +34,30 @@ export function CodeEditor({ file }: CodeEditorProps) {
     );
   }
 
-  if (error) {
-    return (
-      <div className="h-full flex flex-col">
-        <div className="h-9 bg-orion-elevated/60 border-b border-orion-hairline flex items-center px-3">
-          <span className="text-xs font-mono text-muted-foreground">{file.name}</span>
-        </div>
-        <pre className="flex-1 overflow-auto p-4 text-xs font-mono text-muted-foreground whitespace-pre-wrap">
-          {file.content || ''}
-        </pre>
-      </div>
-    );
-  }
-
-  if (!ready) {
-    return (
-      <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
-        Loading editor…
-      </div>
-    );
-  }
-
   return (
-    <div className="h-full">
-      <div className="h-9 bg-orion-elevated/60 border-b border-orion-hairline flex items-center px-3">
-        <span className="text-xs font-mono text-muted-foreground">{file.name}</span>
+    <div className="h-full flex flex-col min-h-0">
+      <div className="h-9 shrink-0 bg-orion-elevated/60 border-b border-orion-hairline flex items-center justify-between px-3">
+        <span className="text-xs font-mono text-muted-foreground truncate">{file.name}</span>
+        <span className="text-[10px] font-mono text-muted-foreground/70 uppercase tracking-wide">
+          {file.language || file.name.split('.').pop() || 'text'}
+        </span>
       </div>
-      <Editor
-        height="calc(100% - 40px)"
-        language={file.language || getLanguage(file.name)}
-        value={file.content || ''}
-        theme="vs-dark"
-        loading={<div className="p-4 text-sm text-muted-foreground">Loading editor…</div>}
-        options={{
-          minimap: { enabled: false },
-          fontSize: 14,
-          lineNumbers: 'on',
-          roundedSelection: false,
-          scrollBeyondLastLine: false,
-          automaticLayout: true,
-          tabSize: 2,
-          wordWrap: 'on',
-          padding: { top: 16, bottom: 16 },
-        }}
-        onMount={(editor) => {
-          editorRef.current = editor;
-        }}
-      />
+      <div className="flex-1 min-h-0 overflow-auto bg-[#0f1218]">
+        <table className="w-full border-collapse font-mono text-[13px] leading-5">
+          <tbody>
+            {lines.map((line, i) => (
+              <tr key={i} className="hover:bg-white/[0.03]">
+                <td className="select-none align-top text-right pr-3 pl-3 py-0 text-muted-foreground/40 w-12 border-r border-white/5 sticky left-0 bg-[#0f1218]">
+                  {i + 1}
+                </td>
+                <td className="align-top pl-3 pr-4 py-0 text-[#d7dde8] whitespace-pre">
+                  {line.length > 0 ? line : ' '}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

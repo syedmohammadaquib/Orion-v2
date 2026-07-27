@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeModelSlug, OpenRouterClient } from './openrouter-client';
+import {
+  normalizeModelSlug,
+  OpenRouterClient,
+  extractAffordableMaxTokens,
+  clampMaxTokens,
+} from './openrouter-client';
 import { ArtifactParser } from './artifact-engine/artifact-parser';
 import { ArtifactNormalizer } from './artifact-engine/artifact-normalizer';
 import { ArtifactEngine } from './artifact-engine/artifact-engine';
@@ -20,6 +25,15 @@ describe('normalizeModelSlug', () => {
 
   it('leaves paid slugs unchanged', () => {
     expect(normalizeModelSlug('google/gemini-2.5-flash')).toBe('google/gemini-2.5-flash');
+  });
+});
+
+describe('OpenRouter credit / max_tokens helpers', () => {
+  it('parses affordable tokens from 402 message', () => {
+    const msg =
+      '402 This request requires more credits, or fewer max_tokens. You requested up to 8192 tokens, but can only afford 2383.';
+    expect(extractAffordableMaxTokens(msg)).toBe(2383);
+    expect(clampMaxTokens(8192, 2383)).toBe(2367);
   });
 });
 
