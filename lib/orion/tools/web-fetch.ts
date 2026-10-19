@@ -54,7 +54,7 @@ export async function fetchUrlText(url: string): Promise<WebFetchResult> {
       signal: controller.signal,
       redirect: 'follow',
       headers: {
-        'User-Agent': 'OrionResearchBot/1.0 (+https://github.com/advay77/Orion-V2)',
+        'User-Agent': 'OrionResearchBot/1.0 (+https://github.com/syedmohammadaquib/Orion-V2)',
         Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
       },
     });

@@ -90,7 +90,7 @@ You type an objective
 ### 1. Install
 
 ```bash
-git clone https://github.com/advay77/Orion-V2.git
+git clone https://github.com/syedmohammadaquib/Orion-V2.git
 cd Orion-V2
 npm install
 ```
