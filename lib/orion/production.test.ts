@@ -8,6 +8,7 @@ import {
 import { ArtifactParser } from './artifact-engine/artifact-parser';
 import { ArtifactNormalizer } from './artifact-engine/artifact-normalizer';
 import { ArtifactEngine } from './artifact-engine/artifact-engine';
+import { ArtifactValidator } from './artifact-engine/artifact-validator';
 import { hasExtractableCode } from './artifact-engine/artifact-gate';
 import { ModelRouter } from './model-router';
 import { getAllFrameworks } from './artifact-engine/frameworks';
@@ -137,6 +138,77 @@ body { font-family: system-ui; }
     expect(result.vfs.has('src/App.tsx') || [...result.vfs.keys()].some((k) => k.endsWith('App.tsx'))).toBe(
       true,
     );
+  });
+});
+
+describe('ArtifactValidator Tailwind configuration', () => {
+  const genericFramework = getAllFrameworks().find((framework) => framework.id === 'generic')!;
+
+  it('warns when Tailwind v3 has no config and @apply uses undefined semantic colors', () => {
+    const validation = new ArtifactValidator().validate(
+      new Map([
+        [
+          'package.json',
+          {
+            path: 'package.json',
+            content: JSON.stringify({ devDependencies: { tailwindcss: '^3.4.0' } }),
+            language: 'json',
+          },
+        ],
+        [
+          'src/index.css',
+          {
+            path: 'src/index.css',
+            content: 'body { @apply bg-light text-dark; }',
+            language: 'css',
+          },
+        ],
+      ]),
+      genericFramework,
+    );
+
+    expect(validation.warnings).toContain(
+      'Tailwind CSS v3 requires a tailwind.config file with content globs.',
+    );
+    expect(validation.warnings.some((warning) => warning.includes('@apply bg-light'))).toBe(true);
+    expect(validation.warnings.some((warning) => warning.includes('@apply text-dark'))).toBe(true);
+  });
+
+  it('accepts semantic @apply colors declared in the Tailwind theme', () => {
+    const validation = new ArtifactValidator().validate(
+      new Map([
+        [
+          'package.json',
+          {
+            path: 'package.json',
+            content: JSON.stringify({ devDependencies: { tailwindcss: '^3.4.0' } }),
+            language: 'json',
+          },
+        ],
+        [
+          'tailwind.config.js',
+          {
+            path: 'tailwind.config.js',
+            content: `module.exports = {
+              content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+              theme: { extend: { colors: { light: '#fff', dark: '#111' } } }
+            };`,
+            language: 'javascript',
+          },
+        ],
+        [
+          'src/index.css',
+          {
+            path: 'src/index.css',
+            content: 'body { @apply bg-light text-dark; }',
+            language: 'css',
+          },
+        ],
+      ]),
+      genericFramework,
+    );
+
+    expect(validation.warnings).toEqual([]);
   });
 });
 

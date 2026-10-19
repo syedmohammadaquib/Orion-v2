@@ -50,7 +50,7 @@ Orion is a multi-agent orchestration console: it plans user objectives, runs spe
         ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                   Planner Agent                              │
-│          Model: DeepSeek V4 Pro                             │
+│          Model: DeepSeek Chat                               │
 │  • Analyzes objective                                        │
 │  • Breaks down into executable tasks                         │
 │  • Prioritizes by dependency and importance                  │
@@ -63,8 +63,8 @@ Orion is a multi-agent orchestration console: it plans user objectives, runs spe
                           ▼                    ▼            ▼
         ┌─────────────────────────┐  ┌──────────────────┐  ┌──────────────────┐
         │  Engineering Agent      │  │  Research Agent  │  │ Marketing Agent  │
-        │  Model: Qwen Coder 235B │  │  Model: GLM-5.2  │  │ Model: DeepSeek  │
-        │                         │  │                  │  │ V4 Pro           │
+        │  Model: DeepSeek Chat   │  │  Model: Gemini  │  │ Model: Gemini    │
+        │                         │  │                  │  │ 2.5 Flash        │
         │ • Architecture design   │  │ • Market research│  │ • Brand strategy │
         │ • Code strategy         │  │ • Trend analysis │  │ • Campaign plan  │
         │ • Implementation plans  │  │ • Competitive    │  │ • Messaging      │
@@ -86,7 +86,7 @@ Orion is a multi-agent orchestration console: it plans user objectives, runs spe
                           ▼
         ┌─────────────────────────────────────────────────┐
         │         OpenRouter Client                       │
-        │  • Unified API to multiple open-source models  │
+        │  • Unified API to multiple models              │
         │  • Handles streaming and non-streaming         │
         │  • Manages authentication and headers           │
         │  • Rate limiting and error handling             │
@@ -95,10 +95,10 @@ Orion is a multi-agent orchestration console: it plans user objectives, runs spe
                           ▼
         ┌─────────────────────────────────────────────────┐
         │         OpenRouter API Service                  │
-        │  • DeepSeek V4 Pro                             │
-        │  • Qwen 3 Coder (235B)                         │
-        │  • GLM-5.2                                      │
-        │  • Additional open-source models                │
+        │  • DeepSeek Chat                                 │
+        │  • Claude Sonnet 4 / Gemini 2.5 Pro / R1        │
+        │  • Gemini 2.5 Flash                             │
+        │  • Additional models via OpenRouter             │
         └─────────────────────────────────────────────────┘
 ```
 
@@ -157,28 +157,28 @@ Context Setup → Generate Prompt → Call Model → Parse Response
 ### 4. Specialized Agents
 
 #### Planner Agent (`lib/orion/agents/planner.ts`)
-**Model**: DeepSeek V4 Pro
+**Model**: DeepSeek Chat (default; env override supported)
 - Analyzes objectives for required tasks
 - Prioritizes by dependency and importance
 - Assigns to appropriate specialized agents
 - Generates reasoning for plan structure
 
 #### Engineering Agent (`lib/orion/agents/engineering.ts`)
-**Model**: Qwen 3 Coder (235B)
+**Model**: DeepSeek Chat by default, with router-selected coding models from the catalog
 - System architecture and design expertise
 - Code generation and implementation strategy
 - Technical problem solving
 - Performance optimization
 
 #### Research Agent (`lib/orion/agents/research.ts`)
-**Model**: GLM-5.2
+**Model**: Gemini 2.5 Flash by default; quality priority can route to Gemini 2.5 Pro or DeepSeek R1
 - Market and competitive analysis
 - Technology research and trends
 - Data-driven insights
 - Evidence-based recommendations
 
 #### Marketing Agent (`lib/orion/agents/marketing.ts`)
-**Model**: DeepSeek V4 Pro
+**Model**: Gemini 2.5 Flash by default for writing tasks
 - Brand strategy and positioning
 - Campaign planning and tactics
 - Customer segmentation
@@ -215,12 +215,17 @@ async stream(model, messages, systemPrompt): Promise<AsyncIterable>
 ```
 
 **Supported Models (defaults — see `model-config.ts` / `model-router.ts`):**
-- DeepSeek Chat V3.1 free (`deepseek/deepseek-chat-v3.1:free`)
-- DeepSeek R1 free (`deepseek/deepseek-r1:free`)
-- Qwen3 Coder free (`qwen/qwen3-coder:free`)
-- Qwen3 Plus free (`qwen/qwen3.6-plus:free`)
-- MiniMax M2.5 free (`minimax/minimax-m2.5:free`)
-- OpenRouter Auto (`openrouter/auto`)
+- DeepSeek Chat (`deepseek/deepseek-chat`)
+- Qwen3 Coder (`qwen/qwen3-coder`)
+- Claude Sonnet 4 (`anthropic/claude-sonnet-4`)
+- GPT-4.1 (`openai/gpt-4.1`)
+- Gemini 2.5 Pro (`google/gemini-2.5-pro`)
+- DeepSeek R1 (`deepseek/deepseek-r1`)
+- OpenAI o4-mini (`openai/o4-mini`)
+- Gemini 2.5 Flash (`google/gemini-2.5-flash`)
+- GPT-4.1 Mini (`openai/gpt-4.1-mini`)
+- Claude Haiku 4.5 (`anthropic/claude-haiku-4.5`)
+- DeepSeek Chat V3.1 free (`deepseek/deepseek-chat-v3.1:free`) and OpenRouter Auto (`openrouter/auto`) as budget fallbacks
 
 ### 7. Model Configuration (`lib/orion/model-config.ts`)
 Centralized default model assignment for each agent.
@@ -228,17 +233,19 @@ Centralized default model assignment for each agent.
 **Default Configuration:**
 ```typescript
 AGENT_MODELS = {
-  planner: 'deepseek/deepseek-chat-v3.1:free',
-  engineering: 'qwen/qwen3-coder:free',
-  research: 'deepseek/deepseek-r1:free',
-  marketing: 'qwen/qwen3.6-plus:free',
+  planner: 'deepseek/deepseek-chat',
+  engineering: 'deepseek/deepseek-chat',
+  research: 'google/gemini-2.5-flash',
+  marketing: 'google/gemini-2.5-flash',
 }
 ```
 
 **Override via Environment:**
 ```env
-PLANNER_MODEL=deepseek/deepseek-r1:free
-ENGINEERING_MODEL=qwen/qwen3-coder:free
+PLANNER_MODEL=deepseek/deepseek-chat
+ENGINEERING_MODEL=deepseek/deepseek-chat
+RESEARCH_MODEL=google/gemini-2.5-flash
+MARKETING_MODEL=google/gemini-2.5-flash
 ```
 
 ## Execution Flow
@@ -254,7 +261,7 @@ Dashboard → API Endpoint → Orchestrator.executePlan()
 ```
 Orchestrator → Planning Engine
     ↓
-Planning Engine → Planner Agent (DeepSeek V4 Pro)
+Planning Engine → Planner Agent (DeepSeek Chat by default, router-selected by priority)
     ↓
 Planner analyzes objective and generates tasks:
   - Task 1: Define app architecture (→ Engineering)
@@ -387,7 +394,7 @@ Agent: Gracefully handle failure
 ### Model Selection Impact
 ```
 Fast Execution:     MiniMax M3, Kimi K2.7
-Balanced:          DeepSeek V4, Qwen Coder, GLM-5.2
+Balanced:          DeepSeek Chat, Gemini 2.5 Flash, Claude Sonnet 4, GPT-4.1
 High Quality:      DeepSeek R1 (slower)
 ```
 
@@ -455,4 +462,4 @@ curl http://localhost:3000/api/orion/state
 
 ## Conclusion
 
-Orion's architecture provides a clean separation of concerns with specialized agents working through a coordinated orchestration system. The use of open-source models ensures transparency, cost-effectiveness, and full control over the AI infrastructure. The system is designed to be extensible, allowing for custom agents and models as needed.
+Orion's architecture provides a clean separation of concerns with specialized agents working through a coordinated orchestration system. The use of OpenRouter-backed models keeps the system flexible and configurable while still allowing for cost-aware routing. The system is designed to be extensible, allowing for custom agents and models as needed.

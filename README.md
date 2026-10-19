@@ -2,7 +2,7 @@
 
 **Turn one sentence into a planned multi-agent run — with live progress, generated files, and a previewable workspace.**
 
-Orion is a multi-agent orchestration console. You describe an objective; a planner breaks it into tasks; specialized agents (research, engineering, marketing) run in waves; results stream into a Graphite-style IDE where you can browse files, preview the UI, and download a ZIP.
+Orion is a multi-agent orchestration console. You describe an objective; a planner breaks it into tasks; specialized agents (planner, research, engineering, marketing) run in waves; results stream into a browser IDE where you can browse files, inspect code, preview the UI, and download a ZIP.
 
 > Not a real operating system. Think of it as a **control room for LLM agents** that produces real project artifacts — not another chat box that dumps a wall of text.
 
@@ -51,7 +51,7 @@ You type an objective
         ↓
  Engineering output → Artifact Engine (parse → normalize → VFS)
         ↓
- Browser IDE: file tree · Monaco editor · iframe preview · ZIP export
+ Browser IDE: file tree · code viewer · iframe preview · ZIP export
 ```
 
 **Shared memory (in-request):** agents pass context (plan, analysis, model used) so engineering can use research instead of starting from zero. One failed research task does not silently poison the whole run — the orchestrator marks failure and continues in a degraded path when possible.
@@ -228,7 +228,19 @@ If your objective (or target) includes `http(s)` URLs, Orion fetches capped text
 Not in this version. Great follow-ups; not required for the local demo loop.
 
 **Something broke on `npm install` / `Cannot find module next`?**  
-Delete `node_modules`, reinstall (`npm install`), restart `npm run dev`. More tips in [`SETUP_GUIDE.md`](SETUP_GUIDE.md).
+Delete `node_modules`, reinstall (`npm install`), and restart `npm run dev`.
+
+---
+
+## Troubleshooting
+
+| Problem | What to check |
+|---------|---------------|
+| `OPENROUTER_API_KEY is not set` or OpenRouter returns 401 | Set a valid `OPENROUTER_API_KEY` in the project-root `.env`, then restart the dev server. |
+| Model unavailable or request returns 400 | Use a currently supported OpenRouter model ID in the model override, or try `openrouter/auto`. |
+| Rate limit 429 | Wait before retrying; the execute API is rate-limited per IP. |
+| `Cannot find module next` after installation | Remove `node_modules`, run `npm install`, and restart `npm run dev`. |
+| Port 3000 is already in use | Stop the other process using that port or use the alternate port reported by Next.js. |
 
 ---
 
@@ -244,7 +256,6 @@ Delete `node_modules`, reinstall (`npm install`), restart `npm run dev`. More ti
 ## Deeper docs
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — system layout  
-- [`SETUP_GUIDE.md`](SETUP_GUIDE.md) — install + troubleshooting  
 
 ---
 

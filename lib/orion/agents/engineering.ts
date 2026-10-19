@@ -113,6 +113,8 @@ ${projectAnalysisInfo}
 7. Do not wrap the whole project in a disposable outer folder (e.g. my-app/...). Paths start at the project root.
 8. Do not emit generic counters/todos unless asked.
 9. If skill is assigned, only emit that slice — but still place files in the correct folders of the SAME scaffold.
+10. For Tailwind CSS, include a complete configuration for the chosen Tailwind major version. For Tailwind v3, configure non-empty content globs covering every source file that uses classes (for example, index.html and src/**/*.{js,ts,jsx,tsx}) and include the PostCSS setup.
+11. Never use custom Tailwind utilities such as bg-light or text-dark in @apply unless their colors are defined in the Tailwind theme. Prefer standard built-in utilities, or define every custom theme token you use. Keep @apply classes valid for the selected Tailwind version.
 ${constraintText}
 
 ## OUTPUT FORMAT
