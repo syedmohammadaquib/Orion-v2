@@ -21,8 +21,10 @@
     "framer-motion": "^12.42.2",
     "jszip": "^3.10.1",
     "lucide-react": "^1.24.0",
+    "mammoth": "^1.13.0",
     "next": "^16.2.11",
     "openai": "^6.46.0",
+    "pdf-parse": "^1.1.4",
     "react": "^19",
     "react-dom": "^19",
     "react-resizable-panels": "^4.12.2",
@@ -34,6 +36,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.0",
     "@types/node": "^24",
+    "@types/pdf-parse": "^1.1.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "postcss": "^8.5",

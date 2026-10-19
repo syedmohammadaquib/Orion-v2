@@ -1,6 +1,6 @@
 import { AgentContext, AgentResponse, AgentType } from './types';
 import { SharedMemory } from './shared-memory';
-import { OpenRouterClient } from './openrouter-client';
+import { ChatToolConfig, OpenRouterClient } from './openrouter-client';
 
 export interface AgentRuntimeConfig {
   model: string;
@@ -86,6 +86,21 @@ export abstract class BaseAgent {
     );
   }
 
+  protected async chatWithToolsForTask(
+    messages: { role: 'user' | 'assistant'; content: string }[],
+    systemPrompt: string,
+    toolConfig: ChatToolConfig,
+  ) {
+    return this.openRouterClient.chat(
+      this.model,
+      messages,
+      systemPrompt,
+      this.maxTokens,
+      this.temperature,
+      toolConfig,
+    );
+  }
+
   protected async tryPreferredModel(
     messages: { role: 'user' | 'assistant'; content: string }[],
     systemPrompt: string,
@@ -124,6 +139,9 @@ export abstract class BaseAgent {
 
       if (response.usage) {
         this.sharedMemory.set(`task_${context.taskId}_usage`, response.usage);
+      }
+      if (response.toolsUsed?.length) {
+        this.sharedMemory.set(`task_${context.taskId}_tools`, response.toolsUsed);
       }
 
       const parsedResponse = this.parseResponse(response.content, context.taskId);

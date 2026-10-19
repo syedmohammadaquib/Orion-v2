@@ -1,13 +1,19 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { ChangeEvent, useEffect, useRef, useState } from 'react';
 import { Plan, ExecutionState } from '@/lib/orion';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AgentDashboard } from '@/components/ide/agent-dashboard';
 import { ArtifactWorkspace } from '@/components/ide/artifact-workspace';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Group, Panel, Separator } from 'react-resizable-panels';
-import { Loader2, Square, Play, X } from 'lucide-react';
+import { FileText, Loader2, Paperclip, Square, Play, X } from 'lucide-react';
+import Link from 'next/link';
+import {
+  MAX_UPLOAD_FILE_BYTES,
+  MAX_UPLOAD_FILES,
+  MAX_UPLOAD_TOTAL_BYTES,
+} from '@/lib/orion/rag';
 
 type Priority = 'speed' | 'quality' | 'cost' | 'balanced';
 
@@ -91,6 +97,7 @@ export function OrionIDE() {
   const [ideState, setIdeState] = useState<IDEState>(INITIAL_STATE);
   const [objective, setObjective] = useState('');
   const [priority, setPriority] = useState<Priority>('balanced');
+  const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -106,6 +113,45 @@ export function OrionIDE() {
       loading: false,
       streamStatus: '',
     }));
+  }
+
+  function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
+    const additions = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    if (additions.length === 0) return;
+
+    const invalid = additions.find((file) => !/\.(pdf|docx)$/i.test(file.name));
+    if (invalid) {
+      setIdeState((prev) => ({
+        ...prev,
+        error: `${invalid.name}: only PDF and DOCX Word files are supported.`,
+      }));
+      return;
+    }
+    const oversized = additions.find((file) => file.size > MAX_UPLOAD_FILE_BYTES);
+    if (oversized) {
+      setIdeState((prev) => ({ ...prev, error: `${oversized.name} exceeds the 5 MB file limit.` }));
+      return;
+    }
+    if (uploadedFiles.length + additions.length > MAX_UPLOAD_FILES) {
+      setIdeState((prev) => ({
+        ...prev,
+        error: `Upload no more than ${MAX_UPLOAD_FILES} files per run.`,
+      }));
+      return;
+    }
+    const nextFiles = [...uploadedFiles, ...additions];
+    if (nextFiles.reduce((total, file) => total + file.size, 0) > MAX_UPLOAD_TOTAL_BYTES) {
+      setIdeState((prev) => ({ ...prev, error: 'The combined upload size must not exceed 15 MB.' }));
+      return;
+    }
+
+    setUploadedFiles(nextFiles);
+    setIdeState((prev) => ({ ...prev, error: null }));
+  }
+
+  function removeUploadedFile(index: number) {
+    setUploadedFiles((current) => current.filter((_, fileIndex) => fileIndex !== index));
   }
 
   async function handleCreatePlan(customObjective?: string) {
@@ -124,10 +170,13 @@ export function OrionIDE() {
     });
 
     try {
+      const formData = new FormData();
+      formData.set('objective', finalObjective);
+      formData.set('priority', priority);
+      uploadedFiles.forEach((file) => formData.append('files', file, file.name));
       const response = await fetch('/api/orion/execute', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ objective: finalObjective, priority }),
+        body: formData,
         signal: controller.signal,
       });
 
@@ -307,6 +356,12 @@ export function OrionIDE() {
             <span className="hidden sm:inline text-[10px] uppercase tracking-[0.2em] text-muted-foreground font-medium">
               Console
             </span>
+            <Link
+              href="/evaluate"
+              className="ml-2 hidden sm:inline text-xs text-muted-foreground hover:text-orion-ink"
+            >
+              Model eval
+            </Link>
           </div>
 
           <div className="flex-1 flex items-center gap-2 min-w-0 max-w-3xl">
@@ -392,6 +447,12 @@ export function OrionIDE() {
                     Multi-agent console. Plan an objective, stream specialized agents, export the
                     workspace.
                   </p>
+                  <Link
+                    href="/evaluate"
+                    className="inline-flex text-sm text-orion-ink underline-offset-4 hover:underline"
+                  >
+                    Compare AI models →
+                  </Link>
                 </div>
 
                 <div className="space-y-4">
@@ -406,6 +467,51 @@ export function OrionIDE() {
                     className="w-full resize-none rounded-lg bg-orion-elevated/90 border border-orion-hairline px-4 py-3.5 text-[15px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:border-orion-ink/45 focus:ring-1 focus:ring-orion-ink/25"
                     disabled={ideState.loading}
                   />
+
+                  <div className="space-y-2">
+                    <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border border-orion-hairline bg-orion-elevated/70 px-3 text-xs text-muted-foreground hover:text-orion-ink">
+                      <Paperclip className="h-3.5 w-3.5" />
+                      Add PDF or Word document
+                      <input
+                        type="file"
+                        accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        multiple
+                        onChange={handleFileSelection}
+                        disabled={ideState.loading || uploadedFiles.length >= MAX_UPLOAD_FILES}
+                        className="sr-only"
+                        aria-label="Upload PDF or DOCX documents"
+                      />
+                    </label>
+                    {uploadedFiles.length > 0 && (
+                      <ul className="space-y-1.5">
+                        {uploadedFiles.map((file, index) => (
+                          <li
+                            key={`${file.name}-${file.lastModified}-${index}`}
+                            className="flex items-center gap-2 rounded-md border border-orion-hairline bg-orion-elevated/50 px-2.5 py-2 text-xs"
+                          >
+                            <FileText className="h-3.5 w-3.5 shrink-0 text-orion-ink" />
+                            <span className="min-w-0 flex-1 truncate">{file.name}</span>
+                            <span className="shrink-0 text-muted-foreground">
+                              {(file.size / (1024 * 1024)).toFixed(2)} MB
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => removeUploadedFile(index)}
+                              disabled={ideState.loading}
+                              className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
+                              aria-label={`Remove ${file.name}`}
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <p className="text-[11px] leading-5 text-muted-foreground/80">
+                      Up to 5 PDF/DOCX files, 5 MB each (15 MB total). Text is indexed in memory
+                      for this run only; extracted text is sent to OpenRouter for embeddings and AI responses.
+                    </p>
+                  </div>
 
                   <div className="flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
                     <div

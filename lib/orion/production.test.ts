@@ -14,6 +14,7 @@ import { ModelRouter } from './model-router';
 import { getAllFrameworks } from './artifact-engine/frameworks';
 import { ConfidenceCalculator } from './confidence';
 import { extractUrls } from './tools/web-fetch';
+import { getEvaluationModels, isEvaluationModelForRole, parseJudgeResponse } from './model-evaluator';
 
 describe('normalizeModelSlug', () => {
   it('maps retired free R1 to paid slug', () => {
@@ -35,6 +36,136 @@ describe('OpenRouter credit / max_tokens helpers', () => {
       '402 This request requires more credits, or fewer max_tokens. You requested up to 8192 tokens, but can only afford 2383.';
     expect(extractAffordableMaxTokens(msg)).toBe(2383);
     expect(clampMaxTokens(8192, 2383)).toBe(2367);
+  });
+});
+
+describe('OpenRouterClient tool calling', () => {
+  it('runs a tool, returns the final answer, and aggregates token usage', async () => {
+    const responses = [
+      {
+        id: 'completion-1',
+        object: 'chat.completion',
+        created: 1,
+        model: 'test/model',
+        choices: [
+          {
+            index: 0,
+            finish_reason: 'tool_calls',
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [
+                {
+                  id: 'call-1',
+                  type: 'function',
+                  function: {
+                    name: 'fetch_reference',
+                    arguments: '{"url":"https://example.com"}',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+        usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+      },
+      {
+        id: 'completion-2',
+        object: 'chat.completion',
+        created: 2,
+        model: 'test/model',
+        choices: [
+          {
+            index: 0,
+            finish_reason: 'stop',
+            message: { role: 'assistant', content: 'Research complete.' },
+          },
+        ],
+        usage: { prompt_tokens: 15, completion_tokens: 5, total_tokens: 20 },
+      },
+    ];
+    const requestBodies: Array<{ messages: Array<{ role: string; content?: string }> }> = [];
+    const fetchMock: typeof fetch = async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      const body = responses.shift();
+      if (!body) throw new Error('Unexpected OpenRouter request');
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    const executedTools: string[] = [];
+    const client = new OpenRouterClient('test-key', fetchMock);
+
+    const result = await client.chat(
+      'test/model',
+      [{ role: 'user', content: 'Read the supplied reference.' }],
+      undefined,
+      1024,
+      0.2,
+      {
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'fetch_reference',
+              description: 'Fetch a reference.',
+              parameters: { type: 'object', properties: { url: { type: 'string' } } },
+            },
+          },
+        ],
+        execute: async (name, args) => {
+          executedTools.push(`${name}:${String(args.url)}`);
+          return '{"ok":true}';
+        },
+      },
+    );
+
+    expect(result.content).toBe('Research complete.');
+    expect(result.toolsUsed).toEqual(['fetch_reference']);
+    expect(result.usage).toEqual({
+      prompt_tokens: 25,
+      completion_tokens: 7,
+      total_tokens: 32,
+    });
+    expect(executedTools).toEqual(['fetch_reference:https://example.com']);
+    expect(requestBodies[1]?.messages.some((message) => message.role === 'tool')).toBe(true);
+  });
+
+  it('requests JSON mode when a caller needs structured output', async () => {
+    let requestBody: { response_format?: { type: string } } | undefined;
+    const fetchMock: typeof fetch = async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body));
+      return new Response(
+        JSON.stringify({
+          id: 'completion-json',
+          object: 'chat.completion',
+          created: 1,
+          model: 'test/model',
+          choices: [
+            {
+              index: 0,
+              finish_reason: 'stop',
+              message: { role: 'assistant', content: '{"scores":[]}' },
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    };
+
+    await new OpenRouterClient('test-key', fetchMock).chat(
+      'test/model',
+      [{ role: 'user', content: 'Return a JSON object.' }],
+      undefined,
+      512,
+      0,
+      undefined,
+      { type: 'json_object' },
+    );
+
+    expect(requestBody?.response_format).toEqual({ type: 'json_object' });
   });
 });
 
@@ -242,6 +373,40 @@ describe('ModelRouter', () => {
     const router = new ModelRouter(client);
     const selection = router.selectModel({ agentType: 'research', priority: 'quality' });
     expect(['deepseek/deepseek-r1', 'anthropic/claude-sonnet-4']).toContain(selection.selectedModel);
+  });
+});
+
+describe('Model evaluation', () => {
+  it('lists only supported role models and rejects mismatched roles', () => {
+    const researchModels = getEvaluationModels('research');
+    expect(researchModels.length).toBeGreaterThan(1);
+    expect(researchModels.some((model) => model.id.includes(':free'))).toBe(false);
+    expect(researchModels.some((model) => model.id === 'openrouter/auto')).toBe(false);
+    expect(isEvaluationModelForRole('google/gemini-2.5-flash', 'research')).toBe(true);
+    expect(isEvaluationModelForRole('qwen/qwen3-coder', 'research')).toBe(false);
+  });
+
+  it('parses rubric scores and rejects incomplete judge responses', () => {
+    const content = JSON.stringify({
+      scores: [
+        {
+          model: 'google/gemini-2.5-flash',
+          taskFulfillment: 8,
+          correctness: 7,
+          completeness: 6,
+          clarity: 9,
+          strengths: 'Clear and direct; handles {edge cases}.',
+          improvements: 'Add more detail.',
+        },
+      ],
+    });
+    expect(parseJudgeResponse(content).scores[0]?.clarity).toBe(9);
+    expect(parseJudgeResponse(content).scores[0]?.strengths).toContain('{edge cases}');
+    expect(parseJudgeResponse(`\`\`\`json\n${content}\n\`\`\``).scores).toHaveLength(1);
+    expect(() => parseJudgeResponse('not json')).toThrow('did not return a JSON score report');
+    expect(() =>
+      parseJudgeResponse(JSON.stringify({ scores: [{ model: 'bad', taskFulfillment: 11 }] })),
+    ).toThrow('invalid score report');
   });
 });
 

@@ -7,6 +7,8 @@ import {
   isSkippedTaskResult,
 } from '@/lib/orion';
 import { NextRequest } from 'next/server';
+import { extractUploadedDocuments } from '@/lib/orion/tools/document-extractor';
+import type { RagDocument } from '@/lib/orion/rag';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -41,20 +43,43 @@ function toResultString(result: unknown): string {
 }
 
 export async function POST(request: NextRequest) {
-  let raw: unknown;
+  let requestFields: z.infer<typeof ExecuteBodySchema> | null = null;
+  let validationError: string | null = null;
+  let uploadedDocuments: RagDocument[] = [];
   try {
-    raw = await request.json();
-  } catch {
-    return jsonError(400, 'Invalid JSON body', 'INVALID_JSON');
+    if (request.headers.get('content-type')?.includes('multipart/form-data')) {
+      const form = await request.formData();
+      const fields = ExecuteBodySchema.safeParse({
+        objective: form.get('objective'),
+        priority: form.get('priority') || 'balanced',
+      });
+      if (!fields.success) {
+        validationError = fields.error.issues[0]?.message || 'Invalid request body';
+      } else {
+        const fileParts = form.getAll('files');
+        const files = fileParts.filter((part): part is File => part instanceof File);
+        if (files.length !== fileParts.length) {
+          return jsonError(422, 'Uploaded files must use the files field.', 'INVALID_UPLOAD');
+        }
+        uploadedDocuments = await extractUploadedDocuments(files);
+        requestFields = fields.data;
+      }
+    } else {
+      const raw: unknown = await request.json();
+      const fields = ExecuteBodySchema.safeParse(raw);
+      if (fields.success) requestFields = fields.data;
+      else validationError = fields.error.issues[0]?.message || 'Invalid request body';
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Could not process request.';
+    return jsonError(422, message, 'INVALID_UPLOAD');
   }
 
-  const parsed = ExecuteBodySchema.safeParse(raw);
-  if (!parsed.success) {
-    const msg = parsed.error.issues[0]?.message || 'Invalid request body';
-    return jsonError(422, msg, 'VALIDATION_ERROR');
+  if (!requestFields) {
+    return jsonError(422, validationError || 'Invalid request body', 'VALIDATION_ERROR');
   }
 
-  const { objective: safeObjective, priority: safePriority } = parsed.data;
+  const { objective: safeObjective, priority: safePriority } = requestFields;
 
   const stream = new TransformStream<Uint8Array, Uint8Array>();
   const writer = stream.writable.getWriter();
@@ -77,7 +102,19 @@ export async function POST(request: NextRequest) {
         await write(status, data);
       });
 
-      await write('connected', { message: 'Orion AI stream connected', objective: safeObjective });
+      await write('connected', {
+        message: 'Orion AI stream connected',
+        objective: safeObjective,
+        uploadedDocuments: uploadedDocuments.map((document) => document.name),
+      });
+
+      if (uploadedDocuments.length > 0) {
+        await write('indexing_documents', {
+          message: 'Extracting and embedding uploaded documents for this run',
+          documents: uploadedDocuments.map((document) => document.name),
+        });
+        await orion.indexDocuments(uploadedDocuments);
+      }
 
       const plan = await orion.executePlan(safeObjective, safePriority);
       const executionState = orion.getExecutionState();

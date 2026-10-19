@@ -6,6 +6,7 @@ export * from './planning-engine';
 export * from './orchestrator';
 export * from './model-config';
 export * from './model-router';
+export * from './model-evaluator';
 export * from './artifact-engine';
 export * from './intent-classifier';
 export * from './task-templates';

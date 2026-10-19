@@ -7,6 +7,7 @@ import { Eye, Code, Files, ListTodo, Download, Loader2, FolderOpen } from 'lucid
 import { FileExplorer } from '@/components/ide/file-explorer';
 import { CodeEditor } from '@/components/ide/code-editor';
 import { PreviewPanel } from '@/components/ide/preview-panel';
+import { selectPreview } from '@/components/ide/preview-runtime';
 import { VirtualFileSystem as VFS, VFSNode, VFSFile, VFSMap } from '@/lib/orion/artifact-engine';
 
 interface ArtifactWorkspaceProps {
@@ -117,24 +118,40 @@ export function ArtifactWorkspace({ plan, artifacts: backendArtifacts }: Artifac
     }
 
     switch (activeTab) {
-      case 'preview':
+      case 'preview': {
+        const artifactVfs =
+          backendArtifacts && 'vfs' in backendArtifacts
+            ? backendArtifacts.vfs
+            : {};
+        const manifest =
+          backendArtifacts && 'manifest' in backendArtifacts
+            ? backendArtifacts.manifest
+            : undefined;
+        const hasBrowserEntry =
+          selectPreview(artifactVfs, manifest).kind !== 'unavailable';
+        const frameworkPreviewable =
+          backendArtifacts !== null &&
+          backendArtifacts !== undefined &&
+          'previewable' in backendArtifacts &&
+          backendArtifacts.previewable === true;
+
         if (
           !hasArtifacts ||
           !backendArtifacts ||
-          !('previewable' in backendArtifacts) ||
-          !backendArtifacts.previewable
+          (!frameworkPreviewable && !hasBrowserEntry)
         ) {
           return (
-            <EmptyTab message="Preview unavailable for this framework" />
+            <EmptyTab message="No browser preview entry was generated for this project" />
           );
         }
         return (
           <PreviewPanel
-            files={parsedArtifacts}
-            vfs={'vfs' in backendArtifacts ? backendArtifacts.vfs : {}}
-            manifest={'manifest' in backendArtifacts ? backendArtifacts.manifest : undefined}
+            vfs={artifactVfs}
+            manifest={manifest}
+            onOpenCode={() => setActiveTab('code')}
           />
         );
+      }
 
       case 'code':
         if (!hasArtifacts) return <EmptyTab message="No files generated yet" />;

@@ -1,20 +1,20 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { RefreshCw, ExternalLink } from 'lucide-react';
-
-interface FileNode {
-  name: string;
-  type: 'file' | 'folder';
-  language?: string;
-  content?: string;
-  children?: FileNode[];
-}
+import {
+  ArrowRight,
+  Code2,
+  Layers3,
+  MonitorPlay,
+  RefreshCw,
+  Terminal,
+} from 'lucide-react';
+import { selectPreview } from './preview-runtime';
 
 interface PreviewPanelProps {
-  files: FileNode[];
   vfs: Record<string, { content: string; language: string }>;
   manifest: any;
+  onOpenCode: () => void;
 }
 
 function normalizeVfsPath(path: string): string {
@@ -33,7 +33,6 @@ function findVfsContent(
   return hit ? hit[1].content : null;
 }
 
-/** Rewrite local CSS/JS references into inline content so the iframe never hits Next routes. */
 function inlineLocalAssets(
   html: string,
   vfs: Record<string, { content: string; language: string }>,
@@ -63,102 +62,60 @@ function inlineLocalAssets(
   return out;
 }
 
-function findFileByName(nodes: FileNode[], name: string): FileNode | null {
-  for (const node of nodes) {
-    if (node.type === 'file' && node.name === name) return node;
-    if (node.children) {
-      const found = findFileByName(node.children, name);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-export function PreviewPanel({ files, vfs, manifest }: PreviewPanelProps) {
+export function PreviewPanel({ vfs, manifest, onOpenCode }: PreviewPanelProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [nonce, setNonce] = useState(0);
+  const selection = useMemo(() => selectPreview(vfs, manifest), [vfs, manifest]);
+
+  const importantFiles = useMemo(() => {
+    const paths = Object.keys(vfs);
+    const preferred = [
+      'package.json',
+      'src/App.tsx',
+      'src/App.jsx',
+      'src/main.tsx',
+      'src/index.tsx',
+      'app/page.tsx',
+      'src/app/page.tsx',
+      'pages/index.tsx',
+      'src/app/globals.css',
+      'app/globals.css',
+    ];
+    const selected = preferred.filter((path) => paths.includes(path));
+    return [...selected, ...paths.filter((path) => !selected.includes(path))].slice(0, 4);
+  }, [vfs]);
+
+  const previewHtml =
+    selection.kind === 'html'
+      ? inlineLocalAssets(vfs[selection.path]?.content || '', vfs)
+      : null;
+  const frameworkName =
+    selection.kind === 'unsupported'
+      ? selection.framework === 'nextjs'
+        ? 'Next.js'
+        : 'React'
+      : null;
 
   const handleRefresh = () => {
     setIsRefreshing(true);
-    setNonce((n) => n + 1);
+    setNonce((value) => value + 1);
     setTimeout(() => setIsRefreshing(false), 400);
   };
 
-  const previewContent = useMemo(() => {
-    let html: string | null = null;
-
-    if (manifest?.previewFile && vfs[manifest.previewFile]?.content) {
-      html = vfs[manifest.previewFile].content;
-    } else {
-      const htmlFile = findFileByName(files, 'index.html');
-      if (htmlFile?.content) html = htmlFile.content;
-      else {
-        const htmlEntry = Object.entries(vfs).find(([path]) => path.endsWith('index.html'));
-        if (htmlEntry) html = htmlEntry[1].content;
-      }
-    }
-
-    if (html) {
-      return inlineLocalAssets(html, vfs);
-    }
-
-    const reactFiles = files.filter((f) => f.name.endsWith('.tsx') || f.name.endsWith('.jsx'));
-    if (reactFiles.length > 0) {
-      const names = reactFiles.map((f) => f.name);
-      return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Preview</title>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #f4f2ec; color: #1a1d26; }
-    .panel { max-width: 560px; margin: 40px auto; background: #fff; border: 1px solid #e5e1d8; border-radius: 8px; padding: 28px; }
-    h1 { margin: 0 0 8px; font-size: 1.2rem; }
-    p, li { color: #5c584f; line-height: 1.5; }
-  </style>
-</head>
-<body>
-  <div class="panel">
-    <h1>React project detected</h1>
-    <p>Live React runtime preview needs a bundler. Open the Code tab to inspect these files:</p>
-    <ul>${names.map((n) => `<li>${n}</li>`).join('')}</ul>
-  </div>
-</body>
-</html>`;
-    }
-
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Preview</title>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 0; padding: 40px; background: #f4f2ec; color: #1a1d26;
-      min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-    .panel { background: #fff; padding: 32px; border: 1px solid #e5e1d8; border-radius: 8px; max-width: 480px; }
-    h1 { margin: 0 0 12px; font-size: 1.25rem; }
-    p { margin: 0; color: #5c584f; line-height: 1.55; }
-  </style>
-</head>
-<body>
-  <div class="panel">
-    <h1>Preview unavailable</h1>
-    <p>Orion could not find a previewable entry file. Open the Code tab to inspect generated files.</p>
-  </div>
-</body>
-</html>`;
-  }, [files, vfs, manifest, nonce]);
-
   return (
     <div className="h-full flex flex-col bg-orion-surface">
-      <div className="h-9 bg-orion-elevated/60 border-b border-orion-hairline flex items-center justify-between px-3">
+      <div className="h-9 shrink-0 bg-orion-elevated/60 border-b border-orion-hairline flex items-center justify-between px-3">
         <div className="flex items-center gap-2">
           <span className="text-xs font-medium text-orion-paper">Preview</span>
-          <span className="text-[10px] font-mono text-muted-foreground">iframe</span>
+          <span className="text-[10px] font-mono text-muted-foreground">
+            {selection.kind === 'html'
+              ? 'HTML · live'
+              : frameworkName
+                ? `${frameworkName} · source view`
+                : 'not available'}
+          </span>
         </div>
-        <div className="flex items-center gap-1">
+        {selection.kind === 'html' && (
           <button
             type="button"
             onClick={handleRefresh}
@@ -167,29 +124,115 @@ export function PreviewPanel({ files, vfs, manifest }: PreviewPanelProps) {
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
           </button>
-          <button
-            type="button"
-            className="p-1.5 hover:bg-secondary/60 rounded text-muted-foreground hover:text-foreground transition-colors"
-            title="Open in New Tab"
-            onClick={() => {
-              const blob = new Blob([previewContent], { type: 'text/html' });
-              const url = URL.createObjectURL(blob);
-              window.open(url, '_blank');
-            }}
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-          </button>
+        )}
+      </div>
+      {selection.kind === 'html' && previewHtml !== null ? (
+        <div className="flex-1 bg-white">
+          <iframe
+            key={nonce}
+            srcDoc={previewHtml}
+            className="w-full h-full border-0"
+            title="Artifact Preview"
+            sandbox="allow-scripts"
+          />
         </div>
-      </div>
-      <div className="flex-1 bg-white">
-        <iframe
-          key={nonce}
-          srcDoc={previewContent}
-          className="w-full h-full border-0"
-          title="Artifact Preview"
-          sandbox="allow-scripts allow-same-origin"
-        />
-      </div>
+      ) : (
+        <div className="relative flex-1 min-h-0 overflow-auto bg-[#f5f7fb] px-5 py-8 sm:px-8 sm:py-12">
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-64 bg-gradient-to-b from-indigo-100/60 via-violet-50/40 to-transparent" />
+          <section className="relative mx-auto w-full max-w-3xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_20px_70px_-35px_rgba(37,47,90,0.28)]">
+            <div className="h-1 bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-400" />
+            <div className="p-6 sm:p-9">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 ring-1 ring-indigo-100">
+                    {frameworkName ? (
+                      <Layers3 className="h-6 w-6" />
+                    ) : (
+                      <MonitorPlay className="h-6 w-6" />
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-indigo-600">
+                      Project workspace
+                    </p>
+                    <p className="mt-0.5 text-sm text-slate-500">
+                      {frameworkName ? `${frameworkName} project` : 'Generated files'}
+                    </p>
+                  </div>
+                </div>
+                <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                  {frameworkName ? 'Code preview' : 'No web entry'}
+                </span>
+              </div>
+
+              <div className="mt-8 max-w-2xl">
+                <h2 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">
+                  {frameworkName
+                    ? `${frameworkName} preview isn’t available yet`
+                    : 'There’s no browser preview for this project'}
+                </h2>
+                <p className="mt-3 text-sm leading-6 text-slate-600 sm:text-base">
+                  {frameworkName === 'Next.js'
+                    ? 'Next.js needs its own server to render pages and framework features. Orion keeps your generated project intact and shows you the files instead of an unreliable or incomplete preview.'
+                    : frameworkName === 'React'
+                      ? 'This React project needs its normal install and build environment to run. You can still inspect every generated file here and run the project locally.'
+                      : 'Orion can preview static HTML projects directly. This project is available in the workspace, but it does not include a supported HTML entry file.'}
+                </p>
+              </div>
+
+              <div className="mt-7 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                    <Code2 className="h-4 w-4 text-indigo-600" />
+                    Your files are ready
+                  </div>
+                  <p className="mt-1.5 text-xs leading-5 text-slate-500">
+                    Browse the generated source and project structure in the Code and Files tabs.
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                    <Terminal className="h-4 w-4 text-indigo-600" />
+                    Run it locally
+                  </div>
+                  <p className="mt-1.5 text-xs leading-5 text-slate-500">
+                    Export the project, install its dependencies, and use its package scripts to launch it.
+                  </p>
+                </div>
+              </div>
+
+              {importantFiles.length > 0 && (
+                <div className="mt-6 rounded-xl border border-slate-200">
+                  <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                    <span className="text-xs font-semibold text-slate-700">Project files</span>
+                    <span className="text-[11px] text-slate-400">
+                      {Object.keys(vfs).length} total
+                    </span>
+                  </div>
+                  <ul className="divide-y divide-slate-100">
+                    {importantFiles.map((path) => (
+                      <li key={path} className="flex items-center gap-2.5 px-4 py-2.5">
+                        <Code2 className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                        <span className="truncate font-mono text-xs text-slate-600">{path}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={onOpenCode}
+                className="mt-7 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+              >
+                Inspect generated code
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

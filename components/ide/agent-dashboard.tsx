@@ -333,6 +333,11 @@ export function AgentDashboard({ plan, state, summary, memory, metrics }: AgentD
                                 {task.status}
                               </span>
                             </div>
+                            {task.metadata?.toolsUsed && task.metadata.toolsUsed.length > 0 && (
+                              <p className="mb-1.5 text-[10px] font-mono text-orion-ink">
+                                Tools: {task.metadata.toolsUsed.join(', ')}
+                              </p>
+                            )}
                             {task.result != null && (
                               <pre className="text-[10px] font-mono text-muted-foreground whitespace-pre-wrap max-h-28 overflow-auto">
                                 {typeof task.result === 'string'

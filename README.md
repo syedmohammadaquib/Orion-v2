@@ -49,6 +49,8 @@ You type an objective
         ↓
  Research can fetch live URLs when you include them
         ↓
+ Optional PDF/DOCX uploads are embedded and retrieved for this run only
+        ↓
  Engineering output → Artifact Engine (parse → normalize → VFS)
         ↓
  Browser IDE: file tree · code viewer · iframe preview · ZIP export
@@ -63,8 +65,11 @@ You type an objective
 - **Planner + orchestrator** — dependency-aware waves, retries, explicit `task_failed` events
 - **Four roles** — planner, research, engineering, marketing
 - **Smart model routing** — `balanced` / `quality` / `speed` / `cost` (not “always the free model”)
-- **Research web-fetch** — if the objective contains URLs, snippets are injected; otherwise analysis is labeled model-only
-- **Artifact IDE** — path-tagged code fences → virtual filesystem → preview + ZIP
+- **Research web-fetch** — the research agent can fetch URLs supplied in the objective; without URLs, analysis is labeled model-only
+- **Run-scoped RAG** — upload PDF/DOCX references or include URLs; Orion chunks the extracted text, embeds it through OpenRouter, and retrieves relevant passages for agents without a vector database or persistent document storage
+- **Agent tool calling** — research and engineering can request focused semantic searches of the current run’s knowledge index; engineering can also read successfully fetched reference sources
+- **Model evaluation** — compare 2–3 role-compatible models on the same task by latency, token use, catalog-based cost estimates, and an independent AI-judge rubric
+- **Artifact IDE** — path-tagged code fences → virtual filesystem → direct HTML/CSS preview, clear React/Next.js preview guidance, and ZIP export
 - **Honest confidence** — blends router confidence with success / output length (not fake 99% every time)
 - **Tests + CI** — Vitest unit tests and GitHub Actions (`typecheck` + `test`)
 
@@ -163,6 +168,8 @@ components/           Orion IDE UI (panels, editor, preview)
 lib/orion/            Brain of the system
   agents/             Planner, research, engineering, marketing
   artifact-engine/    Parse fences → files → validate → preview
+  rag.ts              Chunking, embeddings, in-memory semantic retrieval
+  tools/document-extractor.ts  PDF/DOCX text extraction and upload validation
   tools/web-fetch.ts  URL fetch for research
   orchestrator.ts     Waves, retries, metadata
   model-router.ts     Priority-aware model selection
@@ -177,8 +184,12 @@ lib/orion/            Brain of the system
 | `POST /api/orion/execute` | Run an objective; streams SSE (`planning`, `plan_created`, `task_*`, `result`, …) |
 | `GET/POST /api/orion/plan` | Plan helpers |
 | `GET /api/orion/state` | Snapshot of execution state |
+| `GET /api/orion/evaluate?role=research` | List models available for a role |
+| `POST /api/orion/evaluate` | Compare 2–3 models on one task; uses OpenRouter credits for the candidates and evaluator |
 
 Execute is rate-limited per IP (see [`proxy.ts`](proxy.ts)). Errors return a consistent shape: `{ error, code, retryAfter? }`.
+Model evaluations are also rate-limited per IP. Evaluation scores are independent LLM-judge estimates, not ground-truth correctness measurements; candidate and evaluator costs are estimates based on the local model catalog.
+The execute endpoint accepts JSON or multipart form data. Multipart requests can include up to five PDF/DOCX files (5 MB per file, 15 MB combined); extracted text is sent to OpenRouter for embeddings and model prompts, and source chunks/vectors stay in memory only for that execution.
 
 ---
 
@@ -224,6 +235,12 @@ Keep it in `.env` locally. Don’t commit `.env`. Don’t paste the key into the
 **Does research browse the real web?**  
 If your objective (or target) includes `http(s)` URLs, Orion fetches capped text snippets and feeds them into the research prompt. No URL → clearly model-only analysis. This is not a full search engine crawler.
 
+**Can I provide documents as context?**
+Yes. Attach PDF or DOCX files to a run. Orion extracts their text, creates overlapping chunks, requests embeddings through OpenRouter, and ranks passages by cosine similarity when agents search. The index is request-scoped in RAM; there is no vector database, durable upload storage, or OCR for scanned PDFs. Uploaded text is sent to OpenRouter.
+
+**What can the Preview tab run?**
+HTML/CSS previews directly. React and Next.js projects show a dedicated project card instead of attempting an unreliable browser preview. The card summarizes generated files and links to the Code tab. Export the project and run it locally with its normal install/build environment.
+
 **What about auth / saving projects / multi-user?**  
 Not in this version. Great follow-ups; not required for the local demo loop.
 
@@ -248,6 +265,7 @@ Delete `node_modules`, reinstall (`npm install`), and restart `npm run dev`.
 
 - No login, no multi-tenant storage  
 - Generated code is **not** run through a full sandbox lint/test loop  
+- React and Next.js projects are not executed in the browser preview
 - Preview quality depends on what the model emitted into the VFS  
 - Cost scales with model priority and task count — watch your OpenRouter usage  
 

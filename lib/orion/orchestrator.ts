@@ -9,6 +9,8 @@ import { ModelRouter } from './model-router';
 import { OpenRouterClient, normalizeModelSlug } from './openrouter-client';
 import { CostEngine } from './cost-engine';
 import { ConfidenceCalculator } from './confidence';
+import { InMemoryRagIndex } from './rag';
+import type { RagDocument } from './rag';
 
 export class Orchestrator {
   private planningEngine: PlanningEngine;
@@ -16,6 +18,7 @@ export class Orchestrator {
   private sharedMemory: SharedMemory;
   private executionCallbacks: Array<(status: string, data: unknown) => void> = [];
   private modelRouter: ModelRouter;
+  private openRouterClient: OpenRouterClient;
 
   constructor(
     planningEngine: PlanningEngine,
@@ -27,12 +30,23 @@ export class Orchestrator {
   ) {
     this.planningEngine = planningEngine;
     this.sharedMemory = sharedMemory;
+    this.openRouterClient =
+      openRouterClient || new OpenRouterClient(process.env.OPENROUTER_API_KEY || '');
     this.agents = new Map([
       ['engineering', engineeringAgent],
       ['research', researchAgent],
       ['marketing', marketingAgent],
     ] as [string, BaseAgent][]);
-    this.modelRouter = new ModelRouter(openRouterClient || new OpenRouterClient(process.env.OPENROUTER_API_KEY || ''));
+    this.modelRouter = new ModelRouter(this.openRouterClient);
+  }
+
+  async indexDocuments(documents: RagDocument[]): Promise<void> {
+    if (documents.length === 0) return;
+    const index = await InMemoryRagIndex.create(documents, (texts) =>
+      this.openRouterClient.embed(texts),
+    );
+    this.sharedMemory.set('rag_index', index);
+    this.sharedMemory.set('rag_chunk_count', index.size);
   }
 
   onExecutionUpdate(callback: (status: string, data: unknown) => void): void {
@@ -234,6 +248,7 @@ export class Orchestrator {
             actualCost,
             status: 'completed',
             artifactPaths: [],
+            toolsUsed: (this.sharedMemory.get(`task_${task.id}_tools`) as string[] | undefined) ?? [],
             executionStartTime: new Date(startTime).toISOString(),
             executionEndTime: new Date().toISOString(),
           };

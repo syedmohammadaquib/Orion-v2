@@ -12,7 +12,14 @@ type ChatResult = {
   content: string;
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
   modelUsed?: string;
+  toolsUsed?: string[];
 };
+
+export interface ChatToolConfig {
+  tools: OpenAI.Chat.Completions.ChatCompletionTool[];
+  execute: (name: string, arguments_: Record<string, unknown>) => Promise<string>;
+  maxCalls?: number;
+}
 
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -77,13 +84,15 @@ export function clampMaxTokens(requested: number, affordable?: number | null): n
 
 export class OpenRouterClient {
   private client: OpenAI;
+  private static readonly EMBEDDING_MODEL = 'openai/text-embedding-3-small';
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, fetchImpl?: typeof fetch) {
     this.client = new OpenAI({
       baseURL: 'https://openrouter.ai/api/v1',
       apiKey: apiKey,
       timeout: REQUEST_TIMEOUT_MS,
       maxRetries: 0,
+      ...(fetchImpl ? { fetch: fetchImpl } : {}),
       defaultHeaders: {
         'HTTP-Referer': 'https://orion-ai.vercel.app',
         'X-Title': 'Orion',
@@ -106,10 +115,15 @@ export class OpenRouterClient {
     systemPrompt?: string,
     maxTokens: number = DEFAULT_MAX_TOKENS,
     temperature: number = 0.4,
+    toolConfig?: ChatToolConfig,
+    responseFormat?: OpenAI.Chat.Completions.ChatCompletionCreateParams['response_format'],
   ): Promise<ChatResult> {
     let activeModel = normalizeModelSlug(model);
     let activeMaxTokens = clampMaxTokens(maxTokens);
-    const allMessages = this.buildMessages(messages, systemPrompt);
+    const allMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = this.buildMessages(
+      messages,
+      systemPrompt,
+    );
     let lastError: Error | null = null;
     const tried = new Set<string>();
     let creditFallbackUsed = false;
@@ -117,25 +131,81 @@ export class OpenRouterClient {
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       tried.add(`${activeModel}@${activeMaxTokens}`);
       try {
-        const response = await this.client.chat.completions.create({
-          model: activeModel,
-          max_tokens: activeMaxTokens,
-          messages: allMessages,
-          temperature,
-        });
+        const toolMessages = [...allMessages];
+        const toolsUsed = new Set<string>();
+        const maxCalls = Math.max(0, Math.min(toolConfig?.maxCalls ?? 3, 3));
+        let toolCallCount = 0;
+        const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+        let hasUsage = false;
 
-        const content = response.choices[0]?.message?.content ?? '';
-        return {
-          content,
-          modelUsed: activeModel,
-          usage: response.usage
-            ? {
-                prompt_tokens: response.usage.prompt_tokens,
-                completion_tokens: response.usage.completion_tokens,
-                total_tokens: response.usage.total_tokens,
-              }
-            : undefined,
-        };
+        for (let round = 0; round <= maxCalls; round++) {
+          const response = await this.client.chat.completions.create({
+            model: activeModel,
+            max_tokens: activeMaxTokens,
+            messages: toolMessages,
+            temperature,
+            ...(responseFormat ? { response_format: responseFormat } : {}),
+            ...(toolConfig && round < maxCalls
+              ? { tools: toolConfig.tools, tool_choice: 'auto' as const }
+              : {}),
+          });
+          if (response.usage) {
+            usage.prompt_tokens += response.usage.prompt_tokens;
+            usage.completion_tokens += response.usage.completion_tokens;
+            usage.total_tokens += response.usage.total_tokens;
+            hasUsage = true;
+          }
+
+          const assistantMessage = response.choices[0]?.message;
+          const toolCalls = assistantMessage?.tool_calls;
+          if (!toolConfig || !toolCalls?.length) {
+            return {
+              content:
+                typeof assistantMessage?.content === 'string'
+                  ? assistantMessage.content
+                  : '',
+              modelUsed: activeModel,
+              usage: hasUsage ? usage : undefined,
+              toolsUsed: Array.from(toolsUsed),
+            };
+          }
+
+          if (toolCallCount + toolCalls.length > maxCalls) {
+            throw new Error(`Model exceeded the limit of ${maxCalls} tool calls`);
+          }
+
+          toolMessages.push(assistantMessage);
+          for (const toolCall of toolCalls) {
+            if (toolCall.type !== 'function') {
+              throw new Error('Model returned an unsupported tool call');
+            }
+            let parsedArguments: unknown;
+            try {
+              parsedArguments = JSON.parse(toolCall.function.arguments);
+            } catch {
+              throw new Error(`Model returned invalid JSON for tool ${toolCall.function.name}`);
+            }
+            if (
+              !parsedArguments ||
+              typeof parsedArguments !== 'object' ||
+              Array.isArray(parsedArguments)
+            ) {
+              throw new Error(`Model returned invalid arguments for tool ${toolCall.function.name}`);
+            }
+
+            const result = await toolConfig.execute(
+              toolCall.function.name,
+              parsedArguments as Record<string, unknown>,
+            );
+            toolsUsed.add(toolCall.function.name);
+            toolCallCount++;
+            toolMessages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: result,
+            });
+          }
+        }
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
         const msg = lastError.message;
@@ -195,6 +265,21 @@ export class OpenRouterClient {
     }
 
     throw lastError ?? new Error('OpenRouterClient: unknown error after retries');
+  }
+
+  async embed(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) return [];
+    const response = await this.client.embeddings.create({
+      model: OpenRouterClient.EMBEDDING_MODEL,
+      input: texts,
+    });
+    const vectors = [...response.data]
+      .sort((left, right) => left.index - right.index)
+      .map((item) => item.embedding);
+    if (vectors.length !== texts.length) {
+      throw new Error('OpenRouter returned an incomplete embedding response.');
+    }
+    return vectors;
   }
 
   async stream(

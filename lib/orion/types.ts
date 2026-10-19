@@ -15,6 +15,7 @@ export interface TaskMetadata {
   actualCost: number;
   status: 'pending' | 'in_progress' | 'completed' | 'failed';
   artifactPaths?: string[];
+  toolsUsed?: string[];
   executionStartTime?: string;
   executionEndTime?: string;
 }

@@ -1,15 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 /**
- * In-memory rate limiter — 10 requests per minute per IP.
+ * In-memory rate limiter for expensive AI endpoints, per IP.
  *
  * For production at scale, replace the Map with Redis (e.g. @upstash/ratelimit).
  * The Map approach works fine for a single-instance deployment.
  */
 
 const WINDOW_MS = 60_000; // 1 minute
-const MAX_REQUESTS = 10;
-
 interface RateLimitEntry {
   count: number;
   windowStart: number;
@@ -25,23 +23,25 @@ function getClientIP(request: NextRequest): string {
   );
 }
 
-function checkRateLimit(ip: string): { allowed: boolean; remaining: number; resetAt: number } {
+function checkRateLimit(
+  key: string,
+  limit: number,
+): { allowed: boolean; remaining: number; resetAt: number } {
   const now = Date.now();
-  const entry = store.get(ip);
+  const entry = store.get(key);
 
   if (!entry || now - entry.windowStart > WINDOW_MS) {
-    // New window
-    store.set(ip, { count: 1, windowStart: now });
-    return { allowed: true, remaining: MAX_REQUESTS - 1, resetAt: now + WINDOW_MS };
+    store.set(key, { count: 1, windowStart: now });
+    return { allowed: true, remaining: limit - 1, resetAt: now + WINDOW_MS };
   }
 
-  if (entry.count >= MAX_REQUESTS) {
+  if (entry.count >= limit) {
     const resetAt = entry.windowStart + WINDOW_MS;
     return { allowed: false, remaining: 0, resetAt };
   }
 
   entry.count++;
-  return { allowed: true, remaining: MAX_REQUESTS - entry.count, resetAt: entry.windowStart + WINDOW_MS };
+  return { allowed: true, remaining: limit - entry.count, resetAt: entry.windowStart + WINDOW_MS };
 }
 
 // Clean up stale entries periodically (prevent memory leak)
@@ -59,15 +59,17 @@ if (typeof globalThis !== 'undefined') {
 export default function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Only rate-limit the execute endpoint (the expensive one)
-  if (pathname.startsWith('/api/orion/execute')) {
+  const isExecute = pathname === '/api/orion/execute';
+  const isEvaluation = pathname === '/api/orion/evaluate' && request.method === 'POST';
+  if (isExecute || isEvaluation) {
     const ip = getClientIP(request);
-    const { allowed, remaining, resetAt } = checkRateLimit(ip);
+    const limit = isEvaluation ? 3 : 10;
+    const { allowed, remaining, resetAt } = checkRateLimit(`${pathname}:${ip}`, limit);
 
     if (!allowed) {
       return new NextResponse(
         JSON.stringify({
-          error: 'Rate limit exceeded. Please wait before submitting another objective.',
+          error: 'Rate limit exceeded. Please wait before submitting another AI request.',
           retryAfter: Math.ceil((resetAt - Date.now()) / 1000),
         }),
         {
@@ -75,7 +77,7 @@ export default function proxy(request: NextRequest) {
           headers: {
             'Content-Type': 'application/json',
             'Retry-After': String(Math.ceil((resetAt - Date.now()) / 1000)),
-            'X-RateLimit-Limit': String(MAX_REQUESTS),
+            'X-RateLimit-Limit': String(limit),
             'X-RateLimit-Remaining': '0',
             'X-RateLimit-Reset': String(Math.ceil(resetAt / 1000)),
           },
@@ -84,7 +86,7 @@ export default function proxy(request: NextRequest) {
     }
 
     const response = NextResponse.next();
-    response.headers.set('X-RateLimit-Limit', String(MAX_REQUESTS));
+    response.headers.set('X-RateLimit-Limit', String(limit));
     response.headers.set('X-RateLimit-Remaining', String(remaining));
     response.headers.set('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
     return response;
